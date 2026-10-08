@@ -22,7 +22,7 @@ import sqlite3
 import time
 from decimal import Decimal, InvalidOperation
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, current_app, request, jsonify
 
 from utxo_db import (
     DUST_THRESHOLD,
@@ -945,6 +945,14 @@ def utxo_transfer():
                  f"utxo_transfer_in:{from_address[:20]}:{memo[:30]}")
             )
 
+        # Capture the settled UTXO tx ID before closing the connection.
+        remainder_nrtc = effective_fee_nrtc % (UNIT // ACCOUNT_UNIT) if _dual_write else 0
+        if remainder_nrtc:
+            tx_id = conn.execute(
+                "SELECT spent_by_tx FROM utxo_boxes WHERE box_id = ?",
+                (selected[0]['box_id'],),
+            ).fetchone()[0]
+
         conn.commit()
     except Exception:
         try:
@@ -954,6 +962,12 @@ def utxo_transfer():
         raise
     finally:
         conn.close()
+
+    if remainder_nrtc:
+        current_app.logger.warning(
+            "Dual-write fee truncation: wallet=%s tx=%s remainder_nrtc=%d",
+            from_address, tx_id, remainder_nrtc,
+        )
 
     # --- response -----------------------------------------------------------
 
